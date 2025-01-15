@@ -1,0 +1,207 @@
+---
+# see https://docs.aws.amazon.com/vm-import/latest/userguide/vmimport-image-import.html
+# see https://docs.aws.amazon.com/vm-import/latest/userguide/required-permissions.html
+- name: AMI Create
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Check AMI
+      amazon.aws.ec2_ami_info:
+        region: "{{ region }}"
+        filters:
+          tag:Name: "{{ image_ami_name }}"
+      register: ec2_ami_info
+
+    - name: Upload AMI
+      when: not ec2_ami_info.images
+      block:
+        - name: Create the temporary directory
+          ansible.builtin.file:
+            state: directory
+            name: "{{ image_local_tmp_path | dirname }}"
+            mode: "0755"
+
+        - name: Download the image to the temporary directory
+          ansible.builtin.get_url:
+            url: "{{ image_download_url }}"
+            dest: "{{ image_local_tmp_path }}"
+            mode: "0644"
+
+        - name: Convert the image to vmdk format
+          args:
+            executable: /bin/bash
+          ansible.builtin.shell: |
+            set -euxo pipefail
+            if [ -r "$DST_PATH" ] && [ "$DST_PATH" -nt "$SRC_PATH" ]; then
+              echo 'ANSIBLE CHANGED NO'
+              exit 0
+            fi
+            if [[ "$SRC_URL" == *.tar.xz ]]; then
+              TEMP_DIR="$(mktemp -d)"
+              trap 'rm -rf "$TEMP_DIR"' EXIT
+              tar -xJf "$SRC_PATH" -C "$TEMP_DIR"
+              SRC_PATH="$(find "$TEMP_DIR" \( -name '*.qcow2' -o -name '*.raw' \) -print -quit)"
+            fi
+            # see https://docs.aws.amazon.com/vm-import/latest/userguide/prerequisites.html#vmimport-image-formats
+            qemu-img convert -O vmdk -o subformat=streamOptimized "$SRC_PATH" "$DST_PATH"
+          environment:
+            SRC_URL: "{{ image_download_url }}"
+            SRC_PATH: "{{ image_local_tmp_path }}"
+            DST_PATH: "{{ image_local_img_path }}"
+          register: result
+          changed_when: "'ANSIBLE CHANGED NO' not in result.stdout_lines"
+
+        - name: Create the vmimport IAM role
+          # see https://docs.aws.amazon.com/vm-import/latest/userguide/required-permissions.html
+          block:
+            - name: Create the vmimport IAM role
+              amazon.aws.iam_role:
+                name: "{{ image_s3_bucket_name }}-vmimport"
+                assume_role_policy_document: |
+                  {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Effect": "Allow",
+                        "Principal": {
+                          "Service": "vmie.amazonaws.com"
+                        },
+                        "Action": "sts:AssumeRole",
+                        "Condition": {
+                          "StringEquals": {
+                            "sts:Externalid": "vmimport"
+                          }
+                        }
+                      }
+                    ]
+                  }
+            - name: Create the vmimport IAM inline policy
+              amazon.aws.iam_policy:
+                iam_type: role
+                iam_name: "{{ image_s3_bucket_name }}-vmimport"
+                policy_name: "{{ image_s3_bucket_name }}-vmimport"
+                policy_json: |
+                  {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                          "s3:GetBucketLocation",
+                          "s3:GetObject",
+                          "s3:ListBucket"
+                        ],
+                        "Resource": [
+                          "arn:aws:s3:::{{ image_s3_bucket_name }}",
+                          "arn:aws:s3:::{{ image_s3_bucket_name }}/*"
+                        ]
+                      },
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                          "ec2:ModifySnapshotAttribute",
+                          "ec2:CopySnapshot",
+                          "ec2:RegisterImage",
+                          "ec2:Describe*"
+                        ],
+                        "Resource": "*"
+                      }
+                    ]
+                  }
+
+        - name: Create S3 bucket
+          amazon.aws.s3_bucket:
+            name: "{{ image_s3_bucket_name }}"
+            region: "{{ region }}"
+            resource_tags: "{{ resource_tags }}"
+
+        - name: Upload image to S3
+          amazon.aws.s3_object:
+            bucket: "{{ image_s3_bucket_name }}"
+            object: "{{ image_s3_object_key }}"
+            src: "{{ image_local_img_path }}"
+            region: "{{ region }}"
+            mode: put
+            resource_tags: "{{ resource_tags }}"
+
+        - name: Create the Import image task name
+          # NB we MUST use a different name each time, because when fails, and we re-use
+          #    the task, nothing will happen, because that image task name would already
+          #    exist (i.e. the ec2_import_image module does not modify an existing task).
+          # NB unfortunately, if there are pending tasks, this might further bork things.
+          ansible.builtin.set_fact:
+            import_image_task_name: "{{ image_ami_name }}-{{ now(utc=true, fmt='%Y%m%d%H%M%S') }}"
+
+        - name: Capture the import image start time
+          ansible.builtin.set_fact:
+            import_image_start_time: "{{ now(fmt='%Y-%m-%d %H:%M:%S') }}"
+
+        - name: Create the Import image task
+          # see https://docs.aws.amazon.com/vm-import/latest/userguide/import-vm-image.html
+          # see https://docs.aws.amazon.com/cli/latest/reference/ec2/import-image.html
+          # see https://docs.ansible.com/ansible/latest/collections/amazon/aws/ec2_import_image_module.html
+          amazon.aws.ec2_import_image:
+            region: "{{ region }}"
+            task_name: "{{ import_image_task_name }}"
+            role_name: "{{ image_s3_bucket_name }}-vmimport"
+            description: "{{ image_ami_description }}"
+            architecture: x86_64
+            boot_mode: uefi
+            platform: Linux
+            disk_containers:
+              - format: vmdk
+                user_bucket:
+                  s3_bucket: "{{ image_s3_bucket_name }}"
+                  s3_key: "{{ image_s3_object_key }}"
+            resource_tags: "{{ resource_tags }}"
+          register: ec2_import_image
+
+        - name: Wait for the Import image task to finish
+          # see list the current import image tasks with: aws ec2 describe-import-image-tasks
+          # see https://docs.aws.amazon.com/vm-import/latest/userguide/check-import-task-status.html
+          # see https://docs.aws.amazon.com/cli/latest/reference/ec2/describe-import-image-tasks.html
+          # see https://docs.ansible.com/ansible/latest/collections/amazon/aws/ec2_import_image_info_module.html
+          amazon.aws.ec2_import_image_info:
+            import_task_ids:
+              - "{{ ec2_import_image.import_image.import_task_id }}"
+          register: ec2_import_image_info
+          until: >
+            'import_image' in ec2_import_image_info and
+            ec2_import_image_info.import_image[0].status in ["completed", "deleted"]
+          failed_when: ec2_import_image_info.import_image[0].status != "completed"
+          retries: "{{ 45 * 60 / 30 }}" # 45m.
+          delay: "{{ 30 }}" # 30s.
+
+        - name: Capture the import image end time
+          ansible.builtin.set_fact:
+            import_image_end_time: "{{ now(fmt='%Y-%m-%d %H:%M:%S') }}"
+
+        - name: Calculate the import image duration in seconds
+          ansible.builtin.set_fact:
+            import_image_duration_seconds: "{{ (import_image_end_time | to_datetime('%Y-%m-%d %H:%M:%S')).timestamp() - (import_image_start_time | to_datetime('%Y-%m-%d %H:%M:%S')).timestamp() | int }}" # yamllint disable-line rule:line-length
+
+        - name: Calculate the import image duration in hours and minutes
+          ansible.builtin.set_fact:
+            import_image_duration: "{{ '%dh%dm%ds' % ((import_image_duration_seconds | int) // 3600, ((import_image_duration_seconds | int) % 3600) // 60, (import_image_duration_seconds | int) % 60) }}" # yamllint disable-line rule:line-length
+
+        - name: Tag the image AMI
+          amazon.aws.ec2_ami:
+            region: "{{ region }}"
+            image_id: "{{ ec2_import_image_info.import_image[0].image_id }}"
+            name: "{{ image_ami_name }}"
+            tags: "{{ resource_tags | combine({'Name': image_ami_name}) }}"
+
+        - name: Get AMI information
+          amazon.aws.ec2_ami_info:
+            region: "{{ region }}"
+            image_ids:
+              - "{{ ec2_import_image_info.import_image[0].image_id }}"
+          register: ec2_ami_info_final
+
+        - name: Tag the snapshots associated with the AMI
+          amazon.aws.ec2_tag:
+            region: "{{ region }}"
+            resource: "{{ item }}"
+            tags: "{{ resource_tags | combine({'Name': image_ami_name}) }}"
+          loop: "{{ ec2_ami_info_final.images[0].block_device_mappings | map(attribute='ebs.snapshot_id') | list }}"
+          when: ec2_ami_info_final.images[0].block_device_mappings is defined

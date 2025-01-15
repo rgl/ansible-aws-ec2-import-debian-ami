@@ -1,0 +1,13 @@
+collections:
+  # see https://galaxy.ansible.com/ansible/posix
+  - name: ansible.posix
+    version: 2.0.0
+  # see https://galaxy.ansible.com/ansible/utils
+  - name: ansible.utils
+    version: 5.1.2
+  # see https://galaxy.ansible.com/community/general
+  - name: community.general
+    version: 10.2.0
+  # see https://galaxy.ansible.com/amazon/aws
+  - name: amazon.aws
+    version: 9.1.0

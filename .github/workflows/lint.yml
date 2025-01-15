@@ -1,0 +1,19 @@
+name: build
+on:
+  - push
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the ansible execution environment
+        run: ./ansible-lint.sh --version
+      - name: Lint the ami-create.yml playbook
+        run: ./ansible-lint.sh --offline --parseable ami-create.yml
+      - name: Lint the ami-destroy.yml playbook
+        run: ./ansible-lint.sh --offline --parseable ami-destroy.yml
+      - name: Lint the ami-test-create.yml playbook
+        run: ./ansible-lint.sh --offline --parseable ami-test-create.yml
+      - name: Lint the ami-test-destroy.yml playbook
+        run: ./ansible-lint.sh --offline --parseable ami-test-destroy.yml

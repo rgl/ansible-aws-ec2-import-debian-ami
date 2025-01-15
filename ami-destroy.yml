@@ -1,0 +1,31 @@
+---
+- name: AMI Destroy
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Destroy the AMI
+      block:
+        - name: Get the AMI
+          amazon.aws.ec2_ami_info:
+            region: "{{ region }}"
+            filters:
+              tag:Name: "{{ image_ami_name }}"
+          register: ec2_ami_info_result
+        - name: Destroy the AMI
+          when: ec2_ami_info_result.images
+          amazon.aws.ec2_ami:
+            image_id: "{{ ec2_ami_info_result.images[0].image_id }}"
+            delete_snapshot: true
+            state: absent
+
+    - name: Destroy the vmimport IAM role and inline policy
+      amazon.aws.iam_role:
+        name: "{{ image_s3_bucket_name }}-vmimport"
+        state: absent
+
+    - name: Destroy the S3 bucket
+      amazon.aws.s3_bucket:
+        state: absent
+        force: true
+        name: "{{ image_s3_bucket_name }}"
+        region: "{{ region }}"

@@ -1,0 +1,98 @@
+---
+- name: AMI Test Create
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Create the VPC
+      amazon.aws.ec2_vpc_net:
+        name: "{{ name_prefix }}"
+        region: "{{ region }}"
+        cidr_block: "10.0.0.0/16"
+        tags: "{{ resource_tags }}"
+      register: vpc
+
+    - name: Create the subnet
+      amazon.aws.ec2_vpc_subnet:
+        region: "{{ region }}"
+        az: "{{ region }}a"
+        vpc_id: "{{ vpc.vpc.id }}"
+        cidr: "10.0.1.0/24"
+        tags: "{{ resource_tags }}"
+      register: subnet
+
+    - name: Create the internet gateway
+      amazon.aws.ec2_vpc_igw:
+        region: "{{ region }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        tags: "{{ resource_tags | combine({'Name': name_prefix}) }}"
+      register: igw
+
+    - name: Create the route table
+      amazon.aws.ec2_vpc_route_table:
+        region: "{{ region }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw.gateway_id }}"
+          - dest: ::/0
+            gateway_id: "{{ igw.gateway_id }}"
+        subnets:
+          - "{{ subnet.subnet.id }}"
+        tags: "{{ resource_tags | combine({'Name': name_prefix + '-public'}) }}"
+
+    - name: Create the security group
+      amazon.aws.ec2_security_group:
+        name: "{{ name_prefix }}"
+        description: Security group for the EC2 instance
+        vpc_id: "{{ vpc.vpc.id }}"
+        rules:
+          - rule_desc: SSH
+            cidr_ip: 0.0.0.0/0
+            proto: tcp
+            ports:
+              - 22
+        tags: "{{ resource_tags | combine({'Name': name_prefix}) }}"
+      register: security_group
+
+    - name: Create the admin key pair
+      amazon.aws.ec2_key:
+        name: "{{ name_prefix }}-admin"
+        key_material: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+      register: ec2_key
+
+    - name: Find the AMI
+      amazon.aws.ec2_ami_info:
+        region: "{{ region }}"
+        filters:
+          tag:Name: "{{ image_ami_name }}"
+      register: ec2_ami_info
+
+    - name: Launch the EC2 instance
+      amazon.aws.ec2_instance:
+        name: "{{ name_prefix }}"
+        instance_type: "{{ ec2_instance_type }}"
+        image_id: "{{ ec2_ami_info.images[0].image_id }}"
+        region: "{{ region }}"
+        subnet_id: "{{ subnet.subnet.id }}"
+        security_group: "{{ security_group.group_id }}"
+        network_interfaces:
+          - description: eth0
+            assign_public_ip: true
+        volumes:
+          - device_name: /dev/sda1
+            ebs:
+              delete_on_termination: true
+        metadata_options:
+          http_tokens: required
+        key_name: "{{ ec2_key.key.name }}"
+        # NB cloud-init will save the user data inside the VM at:
+        #    /var/lib/cloud/instances/<instance-id>/user-data.txt
+        # NB runcmd output can be seen inside the VM at:
+        #    /var/log/cloud-init-output.log
+        user_data: |
+          #cloud-config
+          runcmd:
+            - echo "Hello World!"
+        state: running
+        tags: "{{ resource_tags }}"
+      register: ec2

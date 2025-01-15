@@ -1,0 +1,16 @@
+all:
+  vars:
+    region: eu-west-1
+    resource_tags:
+      owner: rgl
+    name_prefix: rgl-ansible-aws-ec2-import-debian-ami
+    image_version: '0.0.0'
+    image_download_url: "https://cdimage.debian.org/images/cloud/bookworm/daily/latest/debian-12-ec2-amd64-daily.tar.xz"
+    image_local_tmp_path: "tmp/{{ image_download_url | basename }}"
+    image_local_img_path: "{{ image_local_tmp_path | regex_replace('\\..*$', '') }}.vmdk"
+    image_s3_bucket_name: "{{ name_prefix }}"
+    image_s3_object_key: "{{ image_local_img_path | basename }}"
+    image_ami_name: "{{ name_prefix }}-{{ image_version }}"
+    image_ami_description: "{{ image_version }}"
+    ec2_instance_name: "{{ name_prefix }}-{{ image_version }}"
+    ec2_instance_type: "t3.micro" # 2 cpu. 1 GiB RAM. Nitro System. see https://aws.amazon.com/ec2/instance-types/t3/
