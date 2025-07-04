@@ -25,6 +25,7 @@
           ansible.builtin.get_url:
             url: "{{ image_download_url }}"
             dest: "{{ image_local_tmp_path }}"
+            checksum: "sha512:{{ image_download_url | dirname }}/SHA512SUMS"
             mode: "0644"
 
         - name: Convert the image to vmdk format
