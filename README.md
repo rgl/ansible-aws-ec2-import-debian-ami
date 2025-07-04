@@ -164,6 +164,65 @@ ssh \
   "admin@$public_ip_address"
 ```
 
+Using your ssh client, and [aws ssm session manager to proxy the ssh connection](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-getting-started-enable-ssh-connections.html), open a shell inside the VM and execute some commands:
+
+```bash
+instance_id="$(aws ec2 describe-instances \
+  --filters "Name=tag:Name,Values=rgl-ansible-aws-ec2-import-debian-ami" \
+  --query "Reservations[*].Instances[*].InstanceId" \
+  --output text)"
+ssh \
+  -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=/dev/null \
+  -o ProxyCommand='aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p' \
+  "admin@$instance_id"
+cat /etc/os-release
+id
+ps -efww --forest
+sudo ps -efww --forest
+exit
+```
+
+Using [aws ssm session manager](https://docs.aws.amazon.com/cli/latest/reference/ssm/start-session.html), open a `sh` shell inside the VM and execute some commands:
+
+```bash
+# NB this executes the command inside a sh shell. to switch to a different one,
+#    see the next example.
+# NB the default ssm session --document-name is SSM-SessionManagerRunShell.
+#    NB that document is created in our account when session manager is used
+#       for the first time.
+# see https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-default-session-document.html
+# see aws ssm describe-document --name SSM-SessionManagerRunShell
+aws ssm start-session --target "$instance_id"
+echo $SHELL
+id
+sudo id
+ps -efww --forest
+sudo ps -efww --forest
+exit
+```
+
+Using [aws ssm session manager](https://docs.aws.amazon.com/cli/latest/reference/ssm/start-session.html), open a `bash` shell inside the VM and execute some commands:
+
+```bash
+# NB this executes the command inside a sh shell, but we immediately switch to
+#    the bash shell.
+# NB the default ssm session --document-name is SSM-SessionManagerRunShell which
+#    is created in our account when session manager is used the first time.
+# see aws ssm describe-document --name AWS-StartInteractiveCommand --query 'Document.Parameters[*]'
+# see aws ssm describe-document --name AWS-StartNonInteractiveCommand --query 'Document.Parameters[*]'
+aws ssm start-session \
+  --document-name AWS-StartInteractiveCommand \
+  --parameters '{"command":["exec env SHELL=$(which bash) bash -il"]}' \
+  --target "$instance_id"
+echo $SHELL
+id
+sudo id
+ps -efww --forest
+sudo ps -efww --forest
+exit
+```
+
 When you are done, destroy everything:
 
 ```bash
