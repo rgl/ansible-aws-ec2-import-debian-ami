@@ -1,10 +1,10 @@
-ansible-core==2.18.1    # see https://pypi.org/project/ansible-core/
-ansible-lint==24.12.2   # see https://pypi.org/project/ansible-lint/
+ansible-core==2.18.6    # see https://pypi.org/project/ansible-core/
+ansible-lint==25.6.1    # see https://pypi.org/project/ansible-lint/
 
 # amazon.aws collection dependencies.
-# see https://github.com/ansible-collections/amazon.aws/blob/9.1.0/requirements.txt
+# see https://github.com/ansible-collections/amazon.aws/blob/10.1.0/requirements.txt
 # see https://galaxy.ansible.com/ui/repo/published/amazon/aws/
 # see https://pypi.org/project/botocore/
 # see https://pypi.org/project/boto3/
-botocore==1.35.92
-boto3==1.35.92
+botocore==1.39.3
+boto3==1.39.3
