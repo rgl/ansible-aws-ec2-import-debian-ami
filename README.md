@@ -132,11 +132,10 @@ Lint the playbooks:
 ./ansible-lint.sh --offline --parseable ami-test-destroy.yml
 ```
 
-Create the AMI, and then test it:
+Create the AMI:
 
 ```bash
 ./ansible-playbook.sh ami-create.yml | tee ansible.log
-./ansible-playbook.sh ami-test-create.yml | tee ansible.log
 ```
 
 In another shell, you can watch the progress using:
@@ -146,7 +145,13 @@ source secrets-example.sh
 watch "aws ec2 describe-import-image-tasks | jq '.ImportImageTasks[0]'"
 ```
 
-Login into the machine:
+Use the created AMI to create a new EC2 instance:
+
+```bash
+./ansible-playbook.sh ami-test-create.yml | tee ansible.log
+```
+
+Login into the EC2 instance:
 
 ```bash
 public_ip_address="$(aws ec2 describe-instances \
